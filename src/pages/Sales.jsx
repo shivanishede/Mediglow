@@ -77,12 +77,37 @@ function SalesList() {
 
     const handleSave = async (data) => {
         try {
-            data.type = activeTab; // Tell the service what category this is (e.g. 'sale')
-            await transactionsService.add(data);
-            toast.success(`${TYPE_LABELS[activeTab]} saved successfully!`);
+            data.type = activeTab;
+            if (editData?.id) {
+                // UPDATE: merge form data on top of the original Firestore fields
+                // This preserves invoice_number, created_at, type (uppercase), etc.
+                const updateFields = {
+                    customerName: data.customerName,
+                    customerId: data.customerId,
+                    date: data.date,
+                    items: data.items,
+                    subtotal: data.subtotal,
+                    discount: data.discount,
+                    tax: data.tax,
+                    total: data.total,
+                    paid: data.paid,
+                    balance: data.balance,
+                    notes: data.notes,
+                    paymentMode: data.paymentMode,
+                    status: data.status,
+                };
+                // Remove undefined keys so we don't wipe existing fields
+                Object.keys(updateFields).forEach(k => updateFields[k] === undefined && delete updateFields[k]);
+                await transactionsService.update(editData.id, updateFields);
+                toast.success(`${TYPE_LABELS[activeTab]} updated successfully!`);
+            } else {
+                // ADD new transaction
+                await transactionsService.add(data);
+                toast.success(`${TYPE_LABELS[activeTab]} saved successfully!`);
+            }
             setShowForm(false);
             setEditData(null);
-            fetchTransactions(); // Refresh the list
+            fetchTransactions();
         } catch (error) {
             console.error(error);
             toast.error('Failed to save transaction');
@@ -102,18 +127,26 @@ function SalesList() {
         }
     };
 
-    const handleMarkPaid = async (id) => {
+    const handleMarkPaid = async (txn) => {
         if (!confirm('Mark this invoice as fully paid?')) return;
         try {
-            // we'll update it directly in firestoreService if we had a method, 
-            // for now let's just use update if we had an edit but we'll leave it 
-            // as this requires a specific 'pay' logic which we didn't add to service yet
-            // but for professional project we can just do:
-            // await transactionsService.update(id, { payment_status: 'PAID', amount_paid: total_amount });
-            toast.success('Functionality coming soon to Firestore!');
+            await transactionsService.update(txn.id, {
+                paid: txn.total || 0,
+                balance: 0,
+                status: 'completed',
+                payment_status: 'PAID',
+            });
+            toast.success('Invoice marked as paid!');
+            fetchTransactions();
         } catch (error) {
-            toast.error('Failed to update status');
+            console.error(error);
+            toast.error('Failed to update payment status');
         }
+    };
+
+    const handleEdit = (txn) => {
+        setEditData(txn);
+        setShowForm(true);
     };
 
     const handlePrint = (txn) => {
@@ -244,6 +277,11 @@ function SalesList() {
                                     )}
                                     <td>
                                         <div className="action-btns" style={{ justifyContent: 'center' }}>
+                                            <button className="btn btn-ghost btn-icon btn-sm" title="Edit"
+                                                style={{ color: 'var(--accent2)' }}
+                                                onClick={() => handleEdit(txn)}>
+                                                <Edit2 size={14} />
+                                            </button>
                                             <button className="btn btn-ghost btn-icon btn-sm" title="Download Bill"
                                                 onClick={() => handlePrint(txn)}>
                                                 <Download size={14} />
@@ -251,7 +289,7 @@ function SalesList() {
                                             {activeTab === 'sale' && (txn.balance || 0) > 0 && (
                                                 <button className="btn btn-ghost btn-icon btn-sm" title="Mark as Paid"
                                                     style={{ color: 'var(--green)' }}
-                                                    onClick={() => handleMarkPaid(txn.id)}>
+                                                    onClick={() => handleMarkPaid(txn)}>
                                                     <CheckCircle size={14} />
                                                 </button>
                                             )}

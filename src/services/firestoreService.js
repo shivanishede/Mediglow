@@ -12,7 +12,8 @@ import {
     serverTimestamp,
     increment,
     runTransaction,
-    getDoc
+    getDoc,
+    setDoc
 } from "firebase/firestore";
 import { db } from "../config/firebase";
 
@@ -91,9 +92,20 @@ export const transactionsService = {
         // Either the transaction is saved AND stock is updated, or nothing happens.
         return await runTransaction(db, async (transaction) => {
             const { items, type, ...tData } = transactionData;
-            
-            // 1. Generate Invoice Number (Simpler in Firestore than SQL count)
-            const invoiceNo = `${type.toUpperCase().substring(0, 4)}-${Date.now().toString().slice(-6)}`;
+
+            // 1. Generate a guaranteed-unique, sequential Invoice Number
+            // We keep a per-type counter document in a "counters" collection.
+            // e.g. counters/SALE  → { seq: 42 }
+            //      counters/PURC  → { seq: 17 }
+            const prefix = type.toUpperCase().substring(0, 4); // e.g. "SALE", "PURC"
+            const counterRef = doc(db, "counters", prefix);
+            const counterSnap = await transaction.get(counterRef);
+
+            // If no counter doc exists yet, start at 1; otherwise increment
+            const nextSeq = counterSnap.exists() ? counterSnap.data().seq + 1 : 1;
+
+            // Zero-pad to 5 digits: SALE-00001, PURC-00042, etc.
+            const invoiceNo = `${prefix}-${String(nextSeq).padStart(5, '0')}`;
             
             // 2. ALL READS MUST HAPPEN FIRST
             // Fetch all item documents before doing any writes
@@ -113,6 +125,11 @@ export const transactionsService = {
             }
 
             // 3. NOW PERFORM ALL WRITES
+
+            // 3a. Upsert the counter (increment or create)
+            transaction.set(counterRef, { seq: nextSeq }, { merge: true });
+
+            // 3b. Save the transaction document
             const newTransactionRef = doc(collection(db, "transactions"));
             transaction.set(newTransactionRef, {
                 ...tData,
@@ -135,6 +152,11 @@ export const transactionsService = {
 
             return { id: newTransactionRef.id, invoiceNo };
         });
+    },
+
+    async update(id, data) {
+        const docRef = doc(db, "transactions", id);
+        return await updateDoc(docRef, data);
     },
 
     async delete(id) {
