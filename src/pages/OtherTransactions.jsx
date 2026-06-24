@@ -20,13 +20,13 @@ export default function OtherTransactions() {
             const mapped = data.map(t => {
                 return {
                     id: t.id,
-                    invoiceNo: t.invoice_number,
-                    fromParty: t.from_party || 'Unknown',
-                    toParty: t.to_party || 'Unknown',
+                    invoiceNo: t.invoiceNo || t.invoice_number,
+                    fromParty: t.fromParty || t.from_party || 'Unknown',
+                    toParty: t.toParty || t.to_party || 'Unknown',
                     notes: t.notes || '',
                     date: t.date,
-                    paymentMode: t.payment_mode || 'Cash',
-                    transferAmount: t.total_amount
+                    paymentMode: t.paymentMode || t.payment_mode || 'Cash',
+                    transferAmount: t.total ?? t.transferAmount ?? t.total_amount ?? 0
                 };
             });
             setP2pTransfers(mapped);

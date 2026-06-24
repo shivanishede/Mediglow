@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import {
     Plus, Search, Download, Trash2, Package, CreditCard,
-    RotateCcw, ClipboardList, CheckCircle
+    RotateCcw, ClipboardList, CheckCircle, Edit2
 } from 'lucide-react';
 import useStore from '../store/useStore';
 import TransactionForm from '../components/TransactionForm';
-import { formatCurrency, formatDate, downloadBillPDF } from '../utils/billPdf';
+import { formatCurrency, formatDate, downloadBillPDF, generateBillPDFBlob } from '../utils/billPdf';
 import { transactionsService } from '../services/firestoreService';
 import toast from 'react-hot-toast';
 
@@ -34,14 +34,15 @@ export default function Purchases() {
         try {
             setLoading(true);
             const data = await transactionsService.getAll(activeTab);
-            // Map Firestore fields to our UI fields if necessary
+            // Map Firestore fields to our UI fields (supports both naming conventions,
+            // falling back instead of overwriting good data with undefined)
             const mapped = data.map(t => ({
                 ...t,
-                invoiceNo: t.invoice_number,
-                customerName: t.party_name,
-                total: t.total_amount,
-                paid: t.amount_paid,
-                balance: t.balance_due,
+                invoiceNo: t.invoiceNo || t.invoice_number,
+                customerName: t.customerName || t.party_name || '—',
+                total: t.total ?? t.total_amount ?? t.amount ?? 0,
+                paid: t.paid ?? t.amount_paid ?? 0,
+                balance: t.balance ?? t.balance_due ?? 0,
             }));
             setTransactions(mapped);
             setLoading(false);
@@ -65,8 +66,29 @@ export default function Purchases() {
     const handleSave = async (data) => {
         try {
             data.type = activeTab; // Tell the service what category this is (e.g. 'purchase')
-            await transactionsService.add(data);
-            toast.success(`${TYPE_LABELS[activeTab]} saved successfully!`);
+            if (editData?.id) {
+                const updateFields = {
+                    customerName: data.customerName,
+                    customerId: data.customerId,
+                    date: data.date,
+                    items: data.items,
+                    subtotal: data.subtotal,
+                    discount: data.discount,
+                    tax: data.tax,
+                    total: data.total,
+                    paid: data.paid,
+                    balance: data.balance,
+                    notes: data.notes,
+                    paymentMode: data.paymentMode,
+                    status: data.status,
+                };
+                Object.keys(updateFields).forEach(k => updateFields[k] === undefined && delete updateFields[k]);
+                await transactionsService.update(editData.id, updateFields);
+                toast.success(`${TYPE_LABELS[activeTab]} updated successfully!`);
+            } else {
+                await transactionsService.add(data);
+                toast.success(`${TYPE_LABELS[activeTab]} saved successfully!`);
+            }
             setShowForm(false);
             setEditData(null);
             fetchTransactions(); // Refresh the list
@@ -74,6 +96,11 @@ export default function Purchases() {
             console.error(error);
             toast.error('Failed to save transaction');
         }
+    };
+
+    const handleEdit = (txn) => {
+        setEditData(txn);
+        setShowForm(true);
     };
 
     const handleDelete = async (id) => {
@@ -90,6 +117,59 @@ export default function Purchases() {
     const handlePrint = (txn) => {
         downloadBillPDF(txn, profile, TYPE_LABELS[txn.type || activeTab]);
         toast.success('Bill downloaded!');
+    };
+
+    const handleWhatsApp = async (txn) => {
+        const type = TYPE_LABELS[txn.type || activeTab];
+        const invoiceNo = txn.invoiceNo || txn.invoice_number || "";
+        const supplier = txn.customerName || "Supplier";
+        const total = Number(txn.total || txn.amount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 });
+        const balance = Number(txn.balance || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 });
+        const supplierPhone = txn.customerPhone ? txn.customerPhone.replace(/[^0-9]/g, "") : "";
+
+        const lines = [];
+        lines.push("*" + (profile?.name || "Shree Samarth Agency") + "*");
+        if (profile?.phone) lines.push("Ph: " + profile.phone);
+        lines.push("");
+        lines.push("*" + type + "* | " + invoiceNo);
+        lines.push("Supplier: " + supplier);
+        lines.push("Total: Rs. " + total);
+        if (Number(txn.balance || 0) > 0) {
+            lines.push("Balance Due: Rs. " + balance);
+        } else {
+            lines.push("Status: Fully Paid");
+        }
+        lines.push("");
+        lines.push("Please find the attached bill. Thank you!");
+        const message = lines.join("\n");
+
+        // Try Web Share API first (mobile — shares the actual PDF to WhatsApp)
+        if (navigator.share && navigator.canShare) {
+            try {
+                toast.loading("Preparing PDF...", { id: "wa-toast" });
+                const { blob, filename } = await generateBillPDFBlob(txn, profile, type);
+                const file = new File([blob], filename, { type: "application/pdf" });
+                if (navigator.canShare({ files: [file] })) {
+                    toast.dismiss("wa-toast");
+                    await navigator.share({ files: [file], title: filename, text: message });
+                    toast.success("Shared successfully!");
+                    return;
+                }
+            } catch (err) {
+                toast.dismiss("wa-toast");
+                if (err.name !== "AbortError") {
+                    console.error("Share failed:", err);
+                }
+            }
+        }
+
+        // Fallback for desktop: open WhatsApp with a text message
+        const encoded = encodeURIComponent(message);
+        const url = supplierPhone
+            ? "https://wa.me/91" + supplierPhone + "?text=" + encoded
+            : "https://wa.me/?text=" + encoded;
+        window.open(url, "_blank");
+        toast("💡 On desktop: download the bill first, then attach it in WhatsApp.", { duration: 5000 });
     };
 
     const list = getList();
@@ -214,9 +294,36 @@ export default function Purchases() {
                                     )}
                                     <td>
                                         <div className="action-btns" style={{ justifyContent: 'center' }}>
+                                            <button className="btn btn-ghost btn-icon btn-sm" title="Edit"
+                                                style={{ color: 'var(--accent2)' }}
+                                                onClick={() => handleEdit(txn)}>
+                                                <Edit2 size={14} />
+                                            </button>
                                             <button className="btn btn-ghost btn-icon btn-sm" title="Download Bill"
                                                 onClick={() => handlePrint(txn)}>
                                                 <Download size={14} />
+                                            </button>
+                                            <button
+                                                title="Send via WhatsApp"
+                                                onClick={() => handleWhatsApp(txn)}
+                                                style={{
+                                                    background: 'none',
+                                                    border: 'none',
+                                                    cursor: 'pointer',
+                                                    padding: '4px 6px',
+                                                    borderRadius: 6,
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    color: '#25D366',
+                                                    transition: 'background 0.15s',
+                                                }}
+                                                onMouseEnter={e => e.currentTarget.style.background = '#25D36622'}
+                                                onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                                            >
+                                                <svg width="16" height="16" viewBox="0 0 32 32" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+                                                    <path d="M16 3C9.373 3 4 8.373 4 15c0 2.385.668 4.61 1.832 6.5L4 29l7.75-1.812A12.93 12.93 0 0 0 16 28c6.627 0 12-5.373 12-12S22.627 3 16 3zm0 2c5.523 0 10 4.477 10 10s-4.477 10-10 10a9.953 9.953 0 0 1-5.174-1.453l-.364-.219-4.596 1.074 1.094-4.47-.238-.373A9.953 9.953 0 0 1 6 15c0-5.523 4.477-10 10-10zm-3.38 5c-.213 0-.56.08-.854.398-.294.317-1.122 1.095-1.122 2.67 0 1.576 1.147 3.098 1.307 3.313.16.214 2.235 3.563 5.51 4.853 2.718 1.073 3.274.86 3.865.806.59-.054 1.903-.777 2.171-1.527.268-.75.268-1.393.188-1.527-.08-.134-.294-.214-.615-.374-.321-.16-1.903-.938-2.197-1.045-.294-.107-.508-.16-.722.16-.214.32-.83 1.045-1.017 1.26-.187.214-.374.24-.695.08-.321-.16-1.355-.5-2.581-1.594-.955-.852-1.6-1.903-1.787-2.224-.187-.32-.02-.494.14-.653.144-.143.321-.374.482-.561.16-.187.213-.32.32-.534.107-.213.054-.4-.027-.561-.08-.16-.703-1.742-.976-2.383-.254-.614-.516-.534-.722-.534z"/>
+                                                </svg>
                                             </button>
                                             {activeTab === 'purchase' && (
                                                 <button className="btn btn-danger btn-icon btn-sm" title="Delete"

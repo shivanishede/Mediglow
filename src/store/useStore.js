@@ -16,6 +16,7 @@ const useStore = create(
         address: 'Pune, Maharashtra',
         gstin: '27AAAAA0000A1Z5',
         logo: null,
+        paymentQR: null, // base64 image of the business's UPI/payment scanner QR code
         themeColor: '#7C6FFF',
       },
       updateProfile: (data) => set((s) => ({ profile: { ...s.profile, ...data } })),

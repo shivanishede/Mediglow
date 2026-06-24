@@ -2,11 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { Plus, Search, Trash2, Edit2, Users, Phone, MapPin, X } from 'lucide-react';
 import { partiesService } from '../services/firestoreService';
 import { formatCurrency } from '../utils/billPdf';
+import useStore from '../store/useStore';
 import toast from 'react-hot-toast';
 
-const EMPTY_FORM = { id: null, type: 'CUSTOMER', name: '', phone: '', email: '', address: '', gstin: '', balance: 0 };
+const EMPTY_FORM = { type: 'CUSTOMER', name: '', phone: '', email: '', address: '', gstin: '', balance: 0 };
 
 export default function Customers() {
+    const { profile } = useStore();
     const [parties, setParties] = useState([]);
     const [search, setSearch] = useState('');
     const [showForm, setShowForm] = useState(false);
@@ -72,13 +74,71 @@ export default function Customers() {
             toast.success('Party deleted from Database!');
             fetchParties(); // Refresh list
         } catch (err) {
-            toast.error('Failed to delete party. They might have existing transactions.');
             console.error(err);
+            // Show the real Firestore error (e.g. "Missing or insufficient permissions")
+            // instead of guessing at the cause.
+            toast.error(`Failed to delete party: ${err.message || 'Unknown error'}`);
         }
     };
 
-    const totalReceivable = parties.reduce((sum, p) => sum + (p.balanceDue || 0), 0);
-    const partiesWithBalance = parties.filter(p => (p.balanceDue || 0) > 0).length;
+    // Converts a base64 data URL into a PNG Blob — PNG is the format with the most
+    // consistent clipboard support across browsers, regardless of the original upload format.
+    const toPngBlob = (dataUrl) => new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            canvas.getContext('2d').drawImage(img, 0, 0);
+            canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Conversion failed')), 'image/png');
+        };
+        img.onerror = reject;
+        img.src = dataUrl;
+    });
+
+    const handleWhatsApp = async (cust) => {
+        if (!cust.phone) {
+            toast.error('This party has no phone number saved');
+            return;
+        }
+        const digits = cust.phone.replace(/[^0-9]/g, '');
+        const fullNumber = digits.length === 10 ? `91${digits}` : digits;
+        const message = `Hi ${cust.name}, please scan the attached QR to pay ${profile?.name || 'us'}. Thank you!`;
+        const url = `https://wa.me/${fullNumber}?text=${encodeURIComponent(message)}`;
+
+        if (!profile?.paymentQR) {
+            window.open(url, '_blank');
+            return;
+        }
+
+        // Try the clipboard first — pasting (Ctrl+V) inside the chat is much less
+        // friction than digging the file out of Downloads and dragging it in.
+        let copied = false;
+        try {
+            if (navigator.clipboard?.write && window.ClipboardItem) {
+                const blob = await toPngBlob(profile.paymentQR);
+                await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+                copied = true;
+            }
+        } catch (err) {
+            console.error('Clipboard copy failed:', err);
+        }
+
+        window.open(url, '_blank');
+
+        if (copied) {
+            toast.success('QR copied! Press Ctrl+V (Cmd+V on Mac) inside the chat to paste and send it.', { duration: 7000 });
+        } else {
+            const a = document.createElement('a');
+            a.href = profile.paymentQR;
+            a.download = `payment-qr-${cust.name}.png`;
+            a.click();
+            toast('💡 QR downloaded — drag it into the chat that just opened to send it.', { duration: 6000 });
+        }
+    };
+
+    const totalReceivable = parties.reduce((sum, p) => sum + (p.balance || 0), 0);
+    const partiesWithBalance = parties.filter(p => (p.balance || 0) > 0).length;
 
     return (
         <div>
@@ -133,7 +193,7 @@ export default function Customers() {
                 )}
 
                 {!loading && filtered.map(cust => {
-                    const balance = cust.balanceDue || 0;
+                    const balance = cust.balance || 0;
                     const initial = cust.name.charAt(0).toUpperCase();
                     return (
                         <div key={cust.id} className="card" style={{ position: 'relative' }}>
@@ -153,6 +213,18 @@ export default function Customers() {
                                     )}
                                 </div>
                                 <div style={{ display: 'flex', gap: 4 }}>
+                                    {cust.phone && (
+                                        <button
+                                            className="btn btn-ghost btn-icon btn-sm"
+                                            title={profile?.paymentQR ? `Send Payment QR on WhatsApp (${cust.phone})` : `Chat on WhatsApp (${cust.phone})`}
+                                            onClick={() => handleWhatsApp(cust)}
+                                            style={{ color: '#25D366' }}
+                                        >
+                                            <svg width="13" height="13" viewBox="0 0 32 32" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+                                                <path d="M16 3C9.373 3 4 8.373 4 15c0 2.385.668 4.61 1.832 6.5L4 29l7.75-1.812A12.93 12.93 0 0 0 16 28c6.627 0 12-5.373 12-12S22.627 3 16 3zm0 2c5.523 0 10 4.477 10 10s-4.477 10-10 10a9.953 9.953 0 0 1-5.174-1.453l-.364-.219-4.596 1.074 1.094-4.47-.238-.373A9.953 9.953 0 0 1 6 15c0-5.523 4.477-10 10-10zm-3.38 5c-.213 0-.56.08-.854.398-.294.317-1.122 1.095-1.122 2.67 0 1.576 1.147 3.098 1.307 3.313.16.214 2.235 3.563 5.51 4.853 2.718 1.073 3.274.86 3.865.806.59-.054 1.903-.777 2.171-1.527.268-.75.268-1.393.188-1.527-.08-.134-.294-.214-.615-.374-.321-.16-1.903-.938-2.197-1.045-.294-.107-.508-.16-.722.16-.214.32-.83 1.045-1.017 1.26-.187.214-.374.24-.695.08-.321-.16-1.355-.5-2.581-1.594-.955-.852-1.6-1.903-1.787-2.224-.187-.32-.02-.494.14-.653.144-.143.321-.374.482-.561.16-.187.213-.32.32-.534.107-.213.054-.4-.027-.561-.08-.16-.703-1.742-.976-2.383-.254-.614-.516-.534-.722-.534z"/>
+                                            </svg>
+                                        </button>
+                                    )}
                                     <button className="btn btn-ghost btn-icon btn-sm" onClick={() => handleOpen(cust)}><Edit2 size={13} /></button>
                                     <button className="btn btn-danger btn-icon btn-sm" onClick={() => handleDelete(cust.id)}><Trash2 size={13} /></button>
                                 </div>

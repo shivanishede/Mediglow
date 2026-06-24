@@ -30,13 +30,13 @@ export default function Expenses() {
             // Form uses amount and category instead of total and notes logic slightly differently
             const mapped = data.map(t => ({
                 id: t.id,
-                invoiceNo: t.invoice_number,
+                invoiceNo: t.invoiceNo || t.invoice_number,
                 category: t.notes?.split('|')[0] || t.type || 'Miscellaneous',
                 notes: t.notes?.split('|')[1] || t.notes || '',
                 date: t.date,
-                paymentMode: t.payment_mode || 'Cash',
-                amount: t.total_amount,
-                paid: t.amount_paid
+                paymentMode: t.paymentMode || t.payment_mode || 'Cash',
+                amount: t.total ?? t.amount ?? t.total_amount ?? 0,
+                paid: t.paid ?? t.amount_paid ?? 0
             }));
             setExpenses(mapped);
             setLoading(false);

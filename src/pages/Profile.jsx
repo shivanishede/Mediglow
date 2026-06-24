@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
     User, Building2, Phone, Mail, MapPin, Hash, Check,
-    Upload, Trash2, Github, ShieldCheck, Palette
+    Upload, Trash2, Github, ShieldCheck, Palette, QrCode
 } from 'lucide-react';
 import useStore from '../store/useStore';
 import toast from 'react-hot-toast';
@@ -25,6 +25,30 @@ export default function Profile() {
     const handleChange = (e) => {
         const { name, value } = e.target;
         setFormData(prev => ({ ...prev, [name]: value }));
+    };
+
+    const handleQRUpload = (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        if (!file.type.startsWith('image/')) {
+            toast.error('Please upload an image file');
+            return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+            const base64 = reader.result;
+            setFormData(prev => ({ ...prev, paymentQR: base64 }));
+            updateProfile({ paymentQR: base64 });
+            toast.success('Payment QR saved! It will now be sent on WhatsApp.');
+        };
+        reader.onerror = () => toast.error('Failed to read image');
+        reader.readAsDataURL(file);
+    };
+
+    const handleQRRemove = () => {
+        setFormData(prev => ({ ...prev, paymentQR: null }));
+        updateProfile({ paymentQR: null });
+        toast.success('Payment QR removed');
     };
 
     return (
@@ -81,6 +105,38 @@ export default function Profile() {
                         </div>
                         <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 12 }}>
                             Choose a color to personalize your interface.
+                        </p>
+                    </div>
+
+                    <div className="card" style={{ padding: 16 }}>
+                        <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <QrCode size={16} color="var(--accent2)" /> Payment QR / Scanner
+                        </h3>
+                        {formData.paymentQR ? (
+                            <div>
+                                <img
+                                    src={formData.paymentQR}
+                                    alt="Payment QR"
+                                    style={{ width: '100%', borderRadius: 8, marginBottom: 10, border: '1px solid var(--border)' }}
+                                />
+                                <div style={{ display: 'flex', gap: 8 }}>
+                                    <label className="btn btn-ghost" style={{ flex: 1, cursor: 'pointer', fontSize: 12, justifyContent: 'center' }}>
+                                        <Upload size={13} style={{ marginRight: 6 }} /> Replace
+                                        <input type="file" accept="image/*" onChange={handleQRUpload} style={{ display: 'none' }} />
+                                    </label>
+                                    <button type="button" className="btn btn-danger" style={{ fontSize: 12 }} onClick={handleQRRemove}>
+                                        <Trash2 size={13} />
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            <label className="btn btn-ghost" style={{ width: '100%', cursor: 'pointer', fontSize: 12, justifyContent: 'center', padding: '14px 0' }}>
+                                <Upload size={14} style={{ marginRight: 6 }} /> Upload QR Code
+                                <input type="file" accept="image/*" onChange={handleQRUpload} style={{ display: 'none' }} />
+                            </label>
+                        )}
+                        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 12 }}>
+                            Upload your UPI/payment scanner. It'll be sent automatically when you tap the WhatsApp icon next to a party.
                         </p>
                     </div>
                 </div>

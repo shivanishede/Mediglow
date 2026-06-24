@@ -22,18 +22,20 @@ export const partiesService = {
     async getAll() {
         const q = query(collection(db, "parties"), orderBy("created_at", "desc"));
         const snapshot = await getDocs(q);
-        return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        return snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id })); // id last: real Firestore ID always wins over any stray "id" field in stored data
     },
     async add(partyData) {
+        const { id, ...cleanData } = partyData; // never persist a fake "id" field
         return await addDoc(collection(db, "parties"), {
-            ...partyData,
+            ...cleanData,
             balance: partyData.balance || 0,
             created_at: serverTimestamp()
         });
     },
     async update(id, partyData) {
+        const { id: _ignore, ...cleanData } = partyData; // never persist a fake "id" field
         const docRef = doc(db, "parties", id);
-        return await updateDoc(docRef, partyData);
+        return await updateDoc(docRef, cleanData);
     },
     async delete(id) {
         return await deleteDoc(doc(db, "parties", id));
@@ -45,11 +47,12 @@ export const itemsService = {
     async getAll() {
         const q = query(collection(db, "items"), orderBy("created_at", "desc"));
         const snapshot = await getDocs(q);
-        return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        return snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id })); // id last: real Firestore ID always wins over any stray "id" field in stored data
     },
     async add(itemData) {
+        const { id, ...cleanData } = itemData; // never persist a fake "id" field
         return await addDoc(collection(db, "items"), {
-            ...itemData,
+            ...cleanData,
             stock: Number(itemData.stock) || 0,
             selling_price: Number(itemData.selling_price) || 0,
             purchase_price: Number(itemData.purchase_price) || 0,
@@ -57,9 +60,10 @@ export const itemsService = {
         });
     },
     async update(id, itemData) {
+        const { id: _ignore, ...cleanData } = itemData; // never persist a fake "id" field
         const docRef = doc(db, "items", id);
         return await updateDoc(docRef, {
-            ...itemData,
+            ...cleanData,
             stock: Number(itemData.stock),
             selling_price: Number(itemData.selling_price),
             purchase_price: Number(itemData.purchase_price)
@@ -84,14 +88,14 @@ export const transactionsService = {
             q = query(collection(db, "transactions"), orderBy("date", "desc"));
         }
         const snapshot = await getDocs(q);
-        return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        return snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id })); // id last: real Firestore ID always wins over any stray "id" field in stored data
     },
 
     async add(transactionData) {
         // We use a Transaction to ensure Atomicity: 
         // Either the transaction is saved AND stock is updated, or nothing happens.
         return await runTransaction(db, async (transaction) => {
-            const { items, type, ...tData } = transactionData;
+            const { items, type, id, ...tData } = transactionData; // never persist a fake "id" field
 
             // 1. Generate a guaranteed-unique, sequential Invoice Number
             // We keep a per-type counter document in a "counters" collection.
@@ -155,8 +159,9 @@ export const transactionsService = {
     },
 
     async update(id, data) {
+        const { id: _ignore, ...cleanData } = data; // never persist a fake "id" field
         const docRef = doc(db, "transactions", id);
-        return await updateDoc(docRef, data);
+        return await updateDoc(docRef, cleanData);
     },
 
     async delete(id) {
