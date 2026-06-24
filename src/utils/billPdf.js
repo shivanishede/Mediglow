@@ -189,7 +189,7 @@ export async function downloadBillPDF(txn, profile, type = 'Estimate') {
         let totalQty = 0;
         let totalAmount = 0;
 
-        const body = items.map((item, idx) => {
+        let body = items.map((item, idx) => {
             const qty = Number(item.qty || item.quantity || 0);
             const price = Number(item.price || item.price_per_unit || item.rate || 0);
             const amount = Number(item.amount || (price * qty) || 0);
@@ -204,6 +204,14 @@ export async function downloadBillPDF(txn, profile, type = 'Estimate') {
                 formatCurrency(amount),
             ];
         });
+
+        // For payment/expense types with no items, show a single summary row
+        if (body.length === 0 && (txn.paid || txn.amount || txn.transferAmount)) {
+            const amt = Number(txn.paid || txn.amount || txn.transferAmount || 0);
+            totalAmount = amt;
+            const label = txn.category || (type + ' received');
+            body = [['1', label, '-', '-', '-', formatCurrency(amt)]];
+        }
 
         autoTable(doc, {
             startY: y,
@@ -250,10 +258,11 @@ export async function downloadBillPDF(txn, profile, type = 'Estimate') {
         y = doc.lastAutoTable.finalY;
 
         // ---- Amount in words + Totals box ----
-        const subTotal = totalAmount;
+        // For payment/expense types that have no items, fall back to paid/amount
+        const subTotal = totalAmount || Number(txn.paid || txn.amount || 0);
         const rounded = Math.round(subTotal);
         const roundOff = rounded - subTotal;
-        const grandTotal = Number(txn.total_amount || txn.total || rounded);
+        const grandTotal = Number(txn.total_amount || txn.total || txn.paid || txn.amount || txn.transferAmount || rounded);
 
         const wordsBoxWidth = pageWidth * 0.62;
         const amtBoxWidth = pageWidth - wordsBoxWidth;
@@ -326,4 +335,203 @@ export async function downloadBillPDF(txn, profile, type = 'Estimate') {
         console.error('PDF Generation Error:', error);
         alert('Could not generate PDF. Please check the console for errors.');
     }
+}
+
+/**
+ * Same as downloadBillPDF but returns a { blob, filename } instead of triggering a download.
+ * Used for sharing via Web Share API (e.g. WhatsApp).
+ */
+export async function generateBillPDFBlob(txn, profile, type = 'Estimate') {
+    const { jsPDF } = await import('jspdf');
+    const { default: autoTable } = await import('jspdf-autotable');
+    const { default: logo } = await import('../assets/swami.jpg');
+
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const ml = 12, mr = 198;
+    const pageWidth = mr - ml;
+    let y = 14;
+
+    const dark = [0, 0, 0];
+    const grey = [60, 60, 60];
+    const lineGrey = [128, 128, 128];
+    const thickLine = [90, 90, 90];
+
+    // Load logo
+    let logoBase64 = null;
+    try {
+        const res = await fetch(logo);
+        const blob2 = await res.blob();
+        logoBase64 = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob2);
+        });
+    } catch (e) { /* no logo */ }
+
+    // Title
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.setTextColor(...dark);
+    doc.text(type, ml + pageWidth / 2, y, { align: 'center' });
+    y += 6;
+
+    // Company / info row
+    const infoTop = y;
+    const infoHeight = 18;
+    const colSplit1 = ml + pageWidth * 0.62;
+    const colSplit2 = ml + pageWidth * 0.81;
+    doc.setDrawColor(...lineGrey);
+    doc.setLineWidth(0.2);
+    doc.rect(ml, infoTop, pageWidth, infoHeight);
+    doc.line(colSplit1, infoTop, colSplit1, infoTop + infoHeight);
+    doc.line(colSplit2, infoTop, colSplit2, infoTop + infoHeight);
+
+    const logoSize = 12;
+    const logoX = ml + 2;
+    const logoY = infoTop + (infoHeight - logoSize) / 2;
+    let textX = ml + 3;
+    if (logoBase64) {
+        try {
+            const fmt = logoBase64.startsWith('data:image/png') ? 'PNG' : 'JPEG';
+            doc.addImage(logoBase64, fmt, logoX, logoY, logoSize, logoSize);
+            textX = logoX + logoSize + 3;
+        } catch (e) { /* skip */ }
+    }
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.setTextColor(...dark);
+    doc.text(profile?.name || 'Shree Samarth Agency', textX, infoTop + 7.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.setTextColor(...grey);
+    const compParts = [];
+    if (profile?.phone) compParts.push('Phone no.: ' + profile.phone);
+    if (profile?.address) compParts.push(profile.address);
+    if (profile?.gstin) compParts.push('GSTIN: ' + profile.gstin);
+    if (compParts.length) doc.text(compParts[0], textX, infoTop + 12.5);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.setTextColor(...dark);
+    doc.text(type + ' No.', colSplit1 + 3, infoTop + 6);
+    doc.setFont('helvetica', 'bold');
+    doc.text(txn.invoiceNo || 'Draft', colSplit1 + 3, infoTop + 11);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Date', colSplit2 + 3, infoTop + 6);
+    doc.setFont('helvetica', 'bold');
+    doc.text(formatDate(txn.date), colSplit2 + 3, infoTop + 11);
+    y = infoTop + infoHeight;
+
+    // Bill for
+    const billTop = y;
+    const lineH = 5;
+    const billLines = [txn.customerName || 'Cash Customer'];
+    if (txn.customerAddress) billLines.push(txn.customerAddress);
+    if (txn.customerPhone) billLines.push('Contact No.: ' + txn.customerPhone);
+    const billHeight = 6 + billLines.length * lineH + 2;
+    doc.setDrawColor(...lineGrey);
+    doc.rect(ml, billTop, pageWidth, billHeight);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.setTextColor(...dark);
+    doc.text(type + ' For', ml + 3, billTop + 5);
+    let blY = billTop + 5 + lineH;
+    billLines.forEach((line, idx) => {
+        doc.setFont('helvetica', idx === 0 ? 'bold' : 'normal');
+        doc.setFontSize(idx === 0 ? 9.5 : 8.5);
+        doc.text(line, ml + 3, blY);
+        blY += lineH;
+    });
+    y = billTop + billHeight;
+
+    // Items table
+    const items = txn.items || [];
+    let totalQty = 0, totalAmount = 0;
+    let body = items.map((item, idx) => {
+        const qty = Number(item.qty || item.quantity || 0);
+        const price = Number(item.price || item.price_per_unit || item.rate || 0);
+        const amount = Number(item.amount || (price * qty) || 0);
+        totalQty += qty;
+        totalAmount += amount;
+        return [String(idx + 1), item.name || item.item_name || 'Item', qty.toString(), item.unit || '-', formatCurrency(price), formatCurrency(amount)];
+    });
+    if (body.length === 0 && (txn.paid || txn.amount || txn.transferAmount)) {
+        const amt = Number(txn.paid || txn.amount || txn.transferAmount || 0);
+        totalAmount = amt;
+        const label = txn.category || (type + ' received');
+        body = [['1', label, '-', '-', '-', formatCurrency(amt)]];
+    }
+    autoTable(doc, {
+        startY: y, margin: { left: ml, right: 210 - mr }, tableWidth: pageWidth,
+        head: [['#', 'Item name', 'Quantity', 'Unit', 'Price/ unit', 'Amount']],
+        body, foot: [['', 'Total', String(totalQty), '', '', formatCurrency(totalAmount)]],
+        theme: 'grid',
+        styles: { fontSize: 8.5, textColor: dark, lineColor: lineGrey, lineWidth: 0.2, cellPadding: 1.6 },
+        headStyles: { fillColor: [255,255,255], textColor: dark, fontStyle: 'bold', lineColor: lineGrey, lineWidth: 0.2 },
+        bodyStyles: { fillColor: [255,255,255] },
+        footStyles: { fillColor: [255,255,255], textColor: dark, fontStyle: 'bold', lineColor: lineGrey, lineWidth: 0.2 },
+        columnStyles: {
+            0: { cellWidth: 8, halign: 'left' },
+            1: { cellWidth: pageWidth - 8 - 22 - 18 - 30 - 30, fontStyle: 'bold' },
+            2: { cellWidth: 22, halign: 'right' },
+            3: { cellWidth: 18, halign: 'right' },
+            4: { cellWidth: 30, halign: 'right' },
+            5: { cellWidth: 30, halign: 'right' },
+        },
+    });
+    y = doc.lastAutoTable.finalY;
+
+    // Totals
+    // For payment/expense types that have no items, fall back to paid/amount
+    const subTotal = totalAmount || Number(txn.paid || txn.amount || 0);
+    const rounded = Math.round(subTotal);
+    const roundOff = rounded - subTotal;
+    const grandTotal = Number(txn.total_amount || txn.total || txn.paid || txn.amount || txn.transferAmount || rounded);
+    const wordsBoxWidth = pageWidth * 0.62;
+    const amtBoxWidth = pageWidth - wordsBoxWidth;
+    const amtBoxX = ml + wordsBoxWidth;
+    const amtRowH = 5.5;
+    const amtBoxHeight = 5.5 + amtRowH * 3 + 2;
+    doc.setDrawColor(...lineGrey);
+    doc.rect(ml, y, wordsBoxWidth, amtBoxHeight);
+    doc.rect(amtBoxX, y, amtBoxWidth, amtBoxHeight);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...dark);
+    doc.text(type + ' Amount In Words', ml + 3, y + 5);
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(9);
+    const wrapped = doc.splitTextToSize(numberToWords(grandTotal), wordsBoxWidth - 6);
+    doc.text(wrapped, ml + 3, y + 10.5);
+    let ay = y + 5;
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5);
+    doc.text('Amounts', amtBoxX + 3, ay); ay += amtRowH;
+    doc.text('Sub Total', amtBoxX + 3, ay);
+    doc.text(formatCurrency(subTotal), amtBoxX + amtBoxWidth - 3, ay, { align: 'right' }); ay += amtRowH;
+    doc.text('Round off', amtBoxX + 3, ay);
+    doc.text((roundOff >= 0 ? '+ ' : '- ') + formatCurrency(Math.abs(roundOff)), amtBoxX + amtBoxWidth - 3, ay, { align: 'right' }); ay += amtRowH;
+    doc.setDrawColor(...thickLine); doc.setLineWidth(0.35);
+    doc.line(amtBoxX, ay - 4, amtBoxX + amtBoxWidth, ay - 4); doc.setLineWidth(0.2);
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5);
+    doc.text('Total', amtBoxX + 3, ay);
+    doc.text(formatCurrency(grandTotal), amtBoxX + amtBoxWidth - 3, ay, { align: 'right' });
+    y += amtBoxHeight;
+
+    // Footer
+    const footHeight = 26;
+    doc.setDrawColor(...lineGrey); doc.setLineWidth(0.2);
+    doc.rect(ml, y, pageWidth, footHeight);
+    doc.line(ml + wordsBoxWidth, y, ml + wordsBoxWidth, y + footHeight);
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5); doc.setTextColor(...dark);
+    doc.text('Terms and conditions', ml + 3, y + 5);
+    doc.setFont('helvetica', 'normal');
+    doc.text(txn.notes || 'Thank you for doing business with us.', ml + 3, y + 10.5);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5);
+    doc.text('For: ' + (profile?.name || 'Shree Samarth Agency'), amtBoxX + amtBoxWidth / 2, y + 5, { align: 'center' });
+    doc.setFont('helvetica', 'bold');
+    doc.text('Authorized Signatory', amtBoxX + amtBoxWidth / 2, y + footHeight - 4, { align: 'center' });
+
+    // Return as blob instead of saving
+    const filename = type.replace(/\s+/g, '_') + '_' + (txn.invoiceNo || 'Draft') + '.pdf';
+    const blob = doc.output('blob');
+    return { blob, filename };
 }
