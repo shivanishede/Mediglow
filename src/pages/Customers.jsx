@@ -111,8 +111,30 @@ export default function Customers() {
             return;
         }
 
-        // Try the clipboard first — pasting (Ctrl+V) inside the chat is much less
-        // friction than digging the file out of Downloads and dragging it in.
+        // --- Mobile: Web Share API attaches the QR file directly into WhatsApp ---
+        if (navigator.share && navigator.canShare) {
+            try {
+                toast.loading('Preparing QR...', { id: 'wa-qr-toast' });
+                const blob = await toPngBlob(profile.paymentQR);
+                const file = new File([blob], `payment-qr-${cust.name}.png`, { type: 'image/png' });
+                if (navigator.canShare({ files: [file] })) {
+                    toast.dismiss('wa-qr-toast');
+                    await navigator.share({ files: [file], title: 'Payment QR', text: message });
+                    toast.success('QR shared successfully!');
+                    return;
+                }
+                toast.dismiss('wa-qr-toast');
+            } catch (err) {
+                toast.dismiss('wa-qr-toast');
+                if (err.name === 'AbortError') return; // User cancelled
+                console.error('Share failed:', err);
+                // Fall through to desktop fallback
+            }
+        }
+
+        // --- Desktop fallback: open WhatsApp then copy QR to clipboard ---
+        window.open(url, '_blank');
+
         let copied = false;
         try {
             if (navigator.clipboard?.write && window.ClipboardItem) {
@@ -124,8 +146,6 @@ export default function Customers() {
             console.error('Clipboard copy failed:', err);
         }
 
-        window.open(url, '_blank');
-
         if (copied) {
             toast.success('QR copied! Press Ctrl+V (Cmd+V on Mac) inside the chat to paste and send it.', { duration: 7000 });
         } else {
@@ -135,7 +155,7 @@ export default function Customers() {
             a.click();
             toast('💡 QR downloaded — drag it into the chat that just opened to send it.', { duration: 6000 });
         }
-    };
+        };
 
     const totalReceivable = parties.reduce((sum, p) => sum + (p.balance || 0), 0);
     const partiesWithBalance = parties.filter(p => (p.balance || 0) > 0).length;
